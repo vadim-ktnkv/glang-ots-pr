@@ -3,6 +3,7 @@ package hw04lrucache
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,5 +48,25 @@ func TestList(t *testing.T) {
 			elems = append(elems, i.Value.(int))
 		}
 		require.Equal(t, []int{70, 80, 60, 40, 10, 30, 50}, elems)
+	})
+
+	t.Run("remove nil", func(t *testing.T) {
+		l := NewList()
+		l.PushFront(1)
+		l.PushFront(2)
+		l.PushFront(3)
+		require.True(t, assert.Panics(t, func() {
+			l.Remove(nil)
+		}))
+	})
+
+	t.Run("remove stranger node", func(t *testing.T) {
+		l := NewList()
+		l.PushFront(1)
+		l.PushFront(2)
+		l.PushFront(3)
+		require.True(t, assert.Panics(t, func() {
+			l.Remove(&ListItem{Value: 111})
+		}))
 	})
 }
