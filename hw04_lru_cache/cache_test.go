@@ -2,6 +2,7 @@ package hw04lrucache
 
 import (
 	"math/rand"
+	"runtime"
 	"strconv"
 	"sync"
 	"testing"
@@ -49,13 +50,39 @@ func TestCache(t *testing.T) {
 		require.Nil(t, val)
 	})
 
+	var cacheCreated, cacheFilled, cacheCleared runtime.MemStats
+	cacheCapacity := 1000
+	keyLen := 6
+
+	getRandomKey := func() Key {
+		x := make([]byte, keyLen)
+		for i := range keyLen {
+			// get random char between ASCII #48 and #126(0-9, a-z, A-Z and some printable symbols)
+			d := rand.Int31n(79) + 48
+			x[i] = byte(d)
+		}
+		return Key(x)
+	}
+
 	t.Run("purge logic", func(t *testing.T) {
-		// Write me
+		c := NewCache(cacheCapacity)
+		runtime.ReadMemStats(&cacheCreated)
+
+		for i := range cacheCapacity {
+			c.Set(getRandomKey(), (i*10)+i)
+		}
+
+		runtime.ReadMemStats(&cacheFilled)
+		c.Clear()
+		runtime.GC()
+		runtime.ReadMemStats(&cacheCleared)
+		result := (cacheFilled.HeapObjects - cacheCleared.HeapObjects) >= (cacheFilled.HeapObjects - cacheCreated.HeapObjects)
+		require.True(t, result)
 	})
 }
 
 func TestCacheMultithreading(t *testing.T) {
-	t.Skip() // Remove me if task with asterisk completed.
+	// t.Skip() // Remove me if task with asterisk completed.
 
 	c := NewCache(10)
 	wg := &sync.WaitGroup{}
@@ -76,4 +103,6 @@ func TestCacheMultithreading(t *testing.T) {
 	}()
 
 	wg.Wait()
+
+	require.True(t, true)
 }
