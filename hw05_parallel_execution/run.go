@@ -8,13 +8,13 @@ import (
 
 var (
 	ErrErrorsLimitExceeded = errors.New("errors limit exceeded")
-	suscessCount           atomic.Int32
+	successCount           atomic.Int32
 	errorsCount            atomic.Int32
 )
 
 type Task func() error
 
-func Worker(wg *sync.WaitGroup, _ int, tasks <-chan Task, m int) {
+func WorkerAtomic(wg *sync.WaitGroup, _ int, tasks <-chan Task, m int) {
 	defer wg.Done()
 	// fmt.Println("STARTED Worker #", workerNum)
 
@@ -28,24 +28,24 @@ func Worker(wg *sync.WaitGroup, _ int, tasks <-chan Task, m int) {
 			errorsCount.Add(1)
 		}
 		// else {
-		// 	fmt.Printf("Worker #%d: reprot for compleated task, sum: %d\n", workerNum, suscessCount.Add(1))
+		// 	fmt.Printf("Worker #%d: completed task, sum: %d\n", workerNum, successCount.Add(1))
 		// }
 	}
-	// fmt.Println("Worker #", workerNum, " terminated")
+	// fmt.Println("TERMINATED Worker #", workerNum)
 }
 
 // Run starts tasks in n goroutines and stops its work when receiving m errors from tasks.
-func Run(tasks []Task, n, m int) error {
+func RunAtomic(tasks []Task, n, m int) error {
 	jobs := make(chan Task, n)
 	var wg sync.WaitGroup
 	wg.Add(n)
 
-	suscessCount.Store(0)
+	successCount.Store(0)
 	errorsCount.Store(0)
 
 	for workerNum := range n {
 		workerNum++
-		go Worker(&wg, workerNum, jobs, m)
+		go WorkerAtomic(&wg, workerNum, jobs, m)
 	}
 	// fmt.Println("Processing jobs")
 
@@ -57,13 +57,77 @@ func Run(tasks []Task, n, m int) error {
 		if int(errorsCount.Load()) >= m {
 			close(jobs)
 			wg.Wait()
-			// fmt.Printf("ER Finished with: Success: %d Errors: %d\n", suscessCount.Load(), errorsCount.Load())
+			// fmt.Printf("ER finished with: Success: %d Errors: %d\n", successCount.Load(), errorsCount.Load())
 			return ErrErrorsLimitExceeded
 		}
 		jobs <- tasks[taskNum]
 	}
 	close(jobs)
 	wg.Wait()
-	// fmt.Printf("Finished with: Success: %d Errors: %d\n", suscessCount.Load(), errorsCount.Load())
+	// fmt.Printf("SC finished with: Success: %d Errors: %d\n", successCount.Load(), errorsCount.Load())
 	return nil
+}
+
+func WorkerChan(wg *sync.WaitGroup, _ int, tasks <-chan Task, errors chan<- struct{}) {
+	defer func() {
+		// fmt.Println("TERMINATED Worker #", workerNum)
+		wg.Done()
+	}()
+
+	// fmt.Println("STARTED Worker #", workerNum)
+
+	for {
+		task, ok := <-tasks
+		if !ok {
+			return
+		}
+		if task == nil {
+			continue
+		}
+		execError := task()
+		if execError != nil {
+			// fmt.Println("Got error; Worker#", workerNum)
+			select {
+			case errors <- struct{}{}:
+			default:
+				return
+			}
+		}
+		// else {
+		// 	fmt.Println("Task successful, Worker#", workerNum)
+		// }
+	}
+}
+
+func Run(inboundTasks []Task, n, m int) error {
+	tasks := make(chan Task, n)
+	errors := make(chan struct{}, m)
+	var result error
+	var wg sync.WaitGroup
+	wg.Add(n)
+
+	for workerNum := range n {
+		workerNum++
+		go WorkerChan(&wg, workerNum, tasks, errors)
+	}
+	// fmt.Println("Processing jobs")
+
+	taskNum := 0
+	for {
+		if len(errors) == m {
+			result = ErrErrorsLimitExceeded
+			break
+		}
+		if taskNum < len(inboundTasks) {
+			tasks <- inboundTasks[taskNum]
+			taskNum++
+		} else {
+			break
+		}
+	}
+	close(tasks)
+	wg.Wait()
+	close(errors)
+
+	return result
 }
