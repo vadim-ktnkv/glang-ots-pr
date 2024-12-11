@@ -2,6 +2,7 @@ package hw05parallelexecution
 
 import (
 	"errors"
+	"math"
 	"sync"
 	"sync/atomic"
 )
@@ -10,63 +11,67 @@ var ErrErrorsLimitExceeded = errors.New("errors limit exceeded")
 
 type Task func() error
 
-func WorkerAtomic(wg *sync.WaitGroup, _ int, tasksQueue <-chan Task, errorsCounter *atomic.Int32, m int) {
+func WorkerAtomic(wg *sync.WaitGroup, inboundTasks []Task, errorsCounter *atomic.Int32, m, start, end int) {
 	defer wg.Done()
-	// fmt.Println("STARTED Worker #", workerNum)
-
-	for task := range tasksQueue {
-		if int(errorsCounter.Load()) >= m {
+	errorsMax := int32(m)
+	var taskResult error
+	for i := start; i < end; i++ {
+		if errorsCounter.Load() >= errorsMax {
 			break
 		}
-		taskResult := task()
+		if inboundTasks[i] == nil {
+			continue
+		}
+		taskResult = inboundTasks[i]()
 		if taskResult != nil {
-			// fmt.Printf("Worker #%d: got error\n", workerNum)
 			errorsCounter.Add(1)
 		}
-		// else {
-		// 	fmt.Printf("Worker #%d: completed task, sum: %d\n", workerNum, successCount.Add(1))
-		// }
 	}
-	// fmt.Println("TERMINATED Worker #", workerNum)
 }
 
 // Run starts tasks in n goroutines and stops its work when receiving m errors from tasks.
-func RunAtomic(inboundTasks []Task, n, m int) error {
-	var errorsCounter atomic.Int32
-	tasksQueue := make(chan Task, n)
+func Run(inboundTasks []Task, n, m int) error {
 	var wg sync.WaitGroup
+	var errorsCounter atomic.Int32
+
+	if m <= 0 {
+		m = 1
+	}
+
+	tasksWorkersRatio := float64(len(inboundTasks)) / float64(n)
+	if tasksWorkersRatio < 1 {
+		n = len(inboundTasks)
+	}
 	wg.Add(n)
-	var returnValue error
 
-	for workerNum := range n {
-		workerNum++
-		go WorkerAtomic(&wg, workerNum, tasksQueue, &errorsCounter, m)
-	}
-	// fmt.Println("Processing jobs")
+	tasksPerWorker := int(math.Ceil(tasksWorkersRatio))
 
-	for _, currTask := range inboundTasks {
-		if int(errorsCounter.Load()) >= m {
-			returnValue = ErrErrorsLimitExceeded
-			break
+	startPos := 0
+
+	for range n {
+		endPos := startPos + tasksPerWorker + 1
+		if endPos > len(inboundTasks) {
+			endPos = len(inboundTasks)
 		}
-		if currTask == nil {
-			continue
-		}
-		tasksQueue <- currTask
+		go WorkerAtomic(&wg, inboundTasks, &errorsCounter, m, startPos, endPos)
+		startPos = endPos
 	}
-	close(tasksQueue)
+
 	wg.Wait()
-	return returnValue
+	if errorsCounter.Load() >= int32(m) {
+		return ErrErrorsLimitExceeded
+	}
+	return nil
 }
 
 func WorkerChan(wg *sync.WaitGroup, tasksQueue <-chan Task, errorsQueue chan<- struct{}) {
 	defer wg.Done()
-
+	var taskResult error
 	for task := range tasksQueue {
 		if task == nil {
 			continue
 		}
-		taskResult := task()
+		taskResult = task()
 		if taskResult != nil {
 			select {
 			case errorsQueue <- struct{}{}:
@@ -77,32 +82,31 @@ func WorkerChan(wg *sync.WaitGroup, tasksQueue <-chan Task, errorsQueue chan<- s
 	}
 }
 
-func TasksDispatcher(inboundTasks []Task, tasksQueue chan<- Task, closeDispatcher <-chan struct{}) {
+func TasksDispatcher(inboundTasks []Task, tasksQueue chan<- Task, closeSignal <-chan struct{}) {
 	defer close(tasksQueue)
 
-	for _, currTask := range inboundTasks {
+	for _, newTask := range inboundTasks {
 		select {
-		case tasksQueue <- currTask:
-		case <-closeDispatcher:
+		case <-closeSignal:
 			return
+		case tasksQueue <- newTask:
 		}
 	}
 }
 
-func Run(inboundTasks []Task, n, m int) error {
-	tasksQueue := make(chan Task, n)
+func RunChan(inboundTasks []Task, n, m int) error {
+	tasksQueue := make(chan Task, len(inboundTasks))
 	errorsQueue := make(chan struct{}, m)
-	closeDispatcher := make(chan struct{})
+	closeSignal := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(n)
 
+	go TasksDispatcher(inboundTasks, tasksQueue, closeSignal)
 	for range n {
 		go WorkerChan(&wg, tasksQueue, errorsQueue)
 	}
-
-	go TasksDispatcher(inboundTasks, tasksQueue, closeDispatcher)
 	wg.Wait()
-	close(closeDispatcher)
+	close(closeSignal)
 	close(errorsQueue)
 
 	if len(errorsQueue) == m {

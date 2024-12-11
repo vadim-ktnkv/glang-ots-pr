@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -66,5 +67,36 @@ func TestRun(t *testing.T) {
 
 		require.Equal(t, runTasksCount, int32(tasksCount), "not all tasks were completed")
 		require.LessOrEqual(t, int64(elapsedTime), int64(sumTime/2), "tasks were run sequentially?")
+	})
+}
+
+func produceTask() Task {
+	return func() error {
+		// fmt.Println("Task begin")
+		time.Sleep(time.Microsecond * 20)
+		return nil
+	}
+}
+
+func BenchmarkTasks(b *testing.B) {
+	////////// Initialization ///////////
+	tasksCount := 100
+	tasks := make([]Task, tasksCount)
+	workerCount := runtime.NumCPU() / 2
+	errorsAllowed := 10
+	for i := range tasksCount {
+		tasks[i] = produceTask()
+	}
+
+	b.Run("BenchAtomic", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			Run(tasks, workerCount, errorsAllowed)
+		}
+	})
+
+	b.Run("BenchChan", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			RunChan(tasks, workerCount, errorsAllowed)
+		}
 	})
 }
