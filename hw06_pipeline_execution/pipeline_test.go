@@ -1,6 +1,7 @@
 package hw06pipelineexecution
 
 import (
+	"fmt"
 	"strconv"
 	"sync"
 	"testing"
@@ -152,4 +153,21 @@ func TestAllStageStop(t *testing.T) {
 		require.Len(t, result, 0)
 
 	})
+}
+
+func TestTtt(t *testing.T) {
+	count := 10
+	slice := make([]int, count)
+	var wg sync.WaitGroup
+	wg.Add(count)
+
+	for i := 0; i < count; i++ {
+		go func() {
+			defer wg.Done()
+			fmt.Printf("addr of %d is %p\n", i, &slice[i])
+			slice[i] = i + 10
+		}()
+	}
+	wg.Wait()
+	fmt.Println(slice)
 }
