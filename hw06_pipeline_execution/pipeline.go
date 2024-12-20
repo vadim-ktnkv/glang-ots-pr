@@ -1,44 +1,64 @@
 package hw06pipelineexecution
 
-import "sync"
+import (
+	"sync"
+)
 
 type (
-	In  = <-chan interface{} //Read Only
-	Out = In                 //Read Only
-	Bi  = chan interface{}   //bi-directional
+	In  = <-chan interface{} // Read Only
+	Out = In                 // Read Only
+	Bi  = chan interface{}   // bi-directional
 )
 
 type Stage func(in In) (out Out)
 
+func isTerminate(done In) bool {
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
+}
+
 func ExecutePipeline(in In, done In, stages ...Stage) Out {
-	//Stage executor
+	// Stage executor
 	var wg sync.WaitGroup
-	wg.Add(len(in))
-
-	stagesResult := make([]Out, len(in))
-	output := make(Bi, len(in))
-	index := 0
+	stagesResult := []Bi{}
+	output := make(Bi)
+	// Process input data in parallel
 	for data := range in {
-		input := make(Bi, 1)
-		input <- data
-		close(input)
-
-		go func(inbound In, i int) {
+		pipelineOut := make(Bi, 1)
+		pipelineIn := make(Bi, 1)
+		pipelineIn <- data
+		close(pipelineIn)
+		// Executing pipeline
+		go func(inbound In, outbound Bi) {
 			defer func() {
-				stagesResult[i] = inbound
+				outbound <- <-inbound
+				close(outbound)
 				wg.Done()
 			}()
-
 			for _, stage := range stages {
 				inbound = stage(inbound)
 			}
-		}(input, index)
-		index++
-	}
-	wg.Wait()
+		}(pipelineIn, pipelineOut)
+		/////////////////////////////
 
-	for _, r := range stagesResult {
-		output <- <-r
+		stagesResult = append(stagesResult, pipelineOut)
+		wg.Add(1)
+	}
+
+	wg.Wait()
+	if isTerminate(done) {
+		close(output)
+	} else {
+		go func() {
+			for _, data := range stagesResult {
+				output <- <-data
+			}
+			close(output)
+		}()
 	}
 
 	return output

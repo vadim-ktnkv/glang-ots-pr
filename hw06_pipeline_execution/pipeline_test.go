@@ -102,7 +102,7 @@ func TestAllStageStop(t *testing.T) {
 	}
 	wg := sync.WaitGroup{}
 	// Stage generator
-	g := func(_ string, f func(v interface{}) interface{}) Stage {
+	g := func(Name string, f func(v interface{}) interface{}) Stage {
 		return func(in In) Out {
 			out := make(Bi)
 			wg.Add(1)
@@ -110,6 +110,7 @@ func TestAllStageStop(t *testing.T) {
 				defer wg.Done()
 				defer close(out)
 				for v := range in {
+					fmt.Printf("Executing %s for data %d\n", Name, v.(int))
 					time.Sleep(sleepPerStage)
 					out <- f(v)
 				}
@@ -135,6 +136,7 @@ func TestAllStageStop(t *testing.T) {
 		go func() {
 			<-time.After(abortDur)
 			close(done)
+			fmt.Println("Terminate")
 		}()
 
 		go func() {
@@ -151,23 +153,5 @@ func TestAllStageStop(t *testing.T) {
 		wg.Wait()
 
 		require.Len(t, result, 0)
-
 	})
-}
-
-func TestTtt(t *testing.T) {
-	count := 10
-	slice := make([]int, count)
-	var wg sync.WaitGroup
-	wg.Add(count)
-
-	for i := 0; i < count; i++ {
-		go func() {
-			defer wg.Done()
-			fmt.Printf("addr of %d is %p\n", i, &slice[i])
-			slice[i] = i + 10
-		}()
-	}
-	wg.Wait()
-	fmt.Println(slice)
 }
