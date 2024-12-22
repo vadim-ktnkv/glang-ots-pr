@@ -1,7 +1,6 @@
 package hw06pipelineexecution
 
 import (
-	"fmt"
 	"strconv"
 	"sync"
 	"testing"
@@ -102,7 +101,7 @@ func TestAllStageStop(t *testing.T) {
 	}
 	wg := sync.WaitGroup{}
 	// Stage generator
-	g := func(Name string, f func(v interface{}) interface{}) Stage {
+	g := func(_ string, f func(v interface{}) interface{}) Stage {
 		return func(in In) Out {
 			out := make(Bi)
 			wg.Add(1)
@@ -110,7 +109,6 @@ func TestAllStageStop(t *testing.T) {
 				defer wg.Done()
 				defer close(out)
 				for v := range in {
-					fmt.Printf("Executing %s for data %d\n", Name, v.(int))
 					time.Sleep(sleepPerStage)
 					out <- f(v)
 				}
@@ -136,7 +134,6 @@ func TestAllStageStop(t *testing.T) {
 		go func() {
 			<-time.After(abortDur)
 			close(done)
-			fmt.Println("Terminate")
 		}()
 
 		go func() {
@@ -155,3 +152,8 @@ func TestAllStageStop(t *testing.T) {
 		require.Len(t, result, 0)
 	})
 }
+
+// Additional tests ides:
+// 1. Test for no goroutine live after "ExecutePipeline" returns data.
+// 2. Check for nil tasks.
+// 3. In case of Stage errors: ignore - write nil in output or panic.
