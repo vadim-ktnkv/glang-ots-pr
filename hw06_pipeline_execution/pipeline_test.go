@@ -1,12 +1,15 @@
 package hw06pipelineexecution
 
 import (
+	"math/rand"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 )
 
 const (
@@ -153,7 +156,86 @@ func TestAllStageStop(t *testing.T) {
 	})
 }
 
-// Additional tests ides:
-// 1. Test for no goroutine live after "ExecutePipeline" returns data.
-// 2. Check for nil tasks.
-// 3. In case of Stage errors: ignore - write nil in output or panic.
+func TestAdditional(t *testing.T) {
+	g := func(_ string, f func(v interface{}) interface{}) Stage {
+		return func(in In) Out {
+			out := make(Bi)
+			go func() {
+				defer close(out)
+				for v := range in {
+					sleepfor := rand.Intn(30) + 30
+					time.Sleep(time.Millisecond * time.Duration(sleepfor))
+					out <- f(v)
+				}
+			}()
+			return out
+		}
+	}
+	t.Run("routines leaks", func(t *testing.T) {
+		defer goleak.VerifyNone(t)
+		stages := []Stage{
+			g("Dummy", func(v interface{}) interface{} { return v }),
+			g("Multiplier (* 2)", func(v interface{}) interface{} { return v.(int) * 2 }),
+			g("Adder (+ 100)", func(v interface{}) interface{} { return v.(int) + 100 }),
+			g("Stringifier", func(v interface{}) interface{} { return strconv.Itoa(v.(int)) }),
+		}
+		data := []int{1, 2, 3, 4, 5}
+		in := make(Bi, len(data))
+		for _, v := range data {
+			in <- v
+		}
+		close(in)
+
+		result := make([]string, 0, len(data))
+		for s := range ExecutePipeline(in, nil, stages...) {
+			result = append(result, s.(string))
+		}
+
+		require.Equal(t, []string{"102", "104", "106", "108", "110"}, result)
+	})
+
+	t.Run("nil stage", func(t *testing.T) {
+		defer goleak.VerifyNone(t)
+
+		dummyCount := atomic.Int32{}
+		MultiplierCount := atomic.Int32{}
+		AdderCount := atomic.Int32{}
+		StringifierCount := atomic.Int32{}
+
+		stages := []Stage{
+			g("Dummy", func(v interface{}) interface{} { dummyCount.Add(1); return v }),
+			g("Multiplier (* 2)", func(v interface{}) interface{} { MultiplierCount.Add(1); return v.(int) * 2 }),
+			g("Adder (+ 100)", func(v interface{}) interface{} { AdderCount.Add(1); return v.(int) + 100 }),
+			g("Stringifier", func(v interface{}) interface{} { StringifierCount.Add(1); return strconv.Itoa(v.(int)) }),
+		}
+
+		data := []interface{}{1, 2, 3, 4, 5}
+		in := make(Bi, len(data))
+		for _, v := range data {
+			in <- v
+		}
+		close(in)
+
+		stages[2] = nil
+		dummyExpected := int32(len(data))
+		MultiplierExpected := int32(len(data))
+		AdderExpected := int32(0)
+		StringifierExpected := int32(0)
+
+		result := make([]interface{}, 0, len(data))
+		for s := range ExecutePipeline(in, nil, stages...) {
+			result = append(result, s)
+		}
+
+		required := make([]interface{}, 0, len(data))
+		for range len(data) {
+			required = append(required, errNilStage)
+		}
+
+		require.Equal(t, required, result)
+		require.Equal(t, dummyExpected, dummyCount.Load())
+		require.Equal(t, MultiplierExpected, MultiplierCount.Load())
+		require.Equal(t, AdderExpected, AdderCount.Load())
+		require.Equal(t, StringifierExpected, StringifierCount.Load())
+	})
+}

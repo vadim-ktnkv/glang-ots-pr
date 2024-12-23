@@ -1,6 +1,7 @@
 package hw06pipelineexecution
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -12,7 +13,10 @@ type (
 	Bi  = chan interface{}   // bi-directional
 )
 
-var terminate atomic.Bool
+var (
+	terminate   atomic.Bool
+	errNilStage = errors.New("stage isn't defined")
+)
 
 type Stage func(in In) (out Out)
 
@@ -28,6 +32,12 @@ func PipelineExecutor(wg *sync.WaitGroup, stages []Stage, input In, output Bi) {
 			return
 		}
 		temp := make(Bi, 1)
+		if stage == nil {
+			temp <- errNilStage
+			input = temp
+			close(temp)
+			return
+		}
 		temp <- <-stage(input)
 		close(temp)
 		input = temp
@@ -47,9 +57,13 @@ func ExecutePipeline(in In, done In, stages ...Stage) Out {
 	executionResults := []Bi{}
 	terminate.Store(false)
 	// This routine will set terminate signal when done is closed, notify workers to stop
+	pipelinesComplete := make(chan struct{})
 	go func() {
-		<-done
-		terminate.Store(true)
+		select {
+		case <-done:
+			terminate.Store(true)
+		case <-pipelinesComplete:
+		}
 	}()
 
 	count := 0
@@ -65,6 +79,7 @@ func ExecutePipeline(in In, done In, stages ...Stage) Out {
 	}
 	output := make(Bi, count)
 	wg.Wait()
+	close(pipelinesComplete)
 	// In case if no termination signal, write result of the execution of the pipelines
 	// to output chan, with the same sequence as input data
 	if !terminate.Load() {
