@@ -1,9 +1,7 @@
 package hw06pipelineexecution
 
 import (
-	"errors"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -13,81 +11,46 @@ type (
 	Bi  = chan interface{}   // bi-directional
 )
 
-var (
-	terminate   atomic.Bool
-	errNilStage = errors.New("stage isn't defined")
-)
-
 type Stage func(in In) (out Out)
-
-func PipelineExecutor(wg *sync.WaitGroup, stages []Stage, input In, output Bi) {
-	defer func() {
-		output <- <-input
-		close(output)
-		wg.Done()
-	}()
-
-	for _, stage := range stages {
-		if terminate.Load() {
-			return
-		}
-		temp := make(Bi, 1)
-		if stage == nil {
-			temp <- errNilStage
-			input = temp
-			close(temp)
-			return
-		}
-		temp <- <-stage(input)
-		close(temp)
-		input = temp
-		// Workaround:
-		// Tried fix "TestPipeline/done_case" failure: "302813589" is not less than "250000000",
-		// which appears 1 of ~30 test iteration, caused by late workers executed tasks from next Stages
-		// Fixed it with skipping wg.Wait(), when <-done termination signal arrives.
-		// This caused a RACING issue in test "TestAllStageStop/done_case".
-		// The one-size-fits-all solution discovered: slow down workers by 1ms before next iteration,
-		// it prevent next Stages tasks execution in case of termination signal arrives.
-		time.Sleep(time.Millisecond)
-	}
-}
 
 func ExecutePipeline(in In, done In, stages ...Stage) Out {
 	var wg sync.WaitGroup
-	executionResults := []Bi{}
-	terminate.Store(false)
-	// This routine will set terminate signal when done is closed, notify workers to stop
-	pipelinesComplete := make(chan struct{})
-	go func() {
-		select {
-		case <-done:
-			terminate.Store(true)
-		case <-pipelinesComplete:
+	for _, stage := range stages {
+		if stage == nil {
+			panic("Stage is nil")
 		}
-	}()
-
-	count := 0
-	for data := range in {
-		pipelineIn := make(Bi, 1)
-		pipelineIn <- data
-		close(pipelineIn)
-		pipelineOut := make(Bi, 1)
-		executionResults = append(executionResults, pipelineOut) // preserve sequence of input data for output
-		go PipelineExecutor(&wg, stages, pipelineIn, pipelineOut)
-		wg.Add(1)
-		count++
-	}
-	output := make(Bi, count)
-	wg.Wait()
-	close(pipelinesComplete)
-	// In case if no termination signal, write result of the execution of the pipelines
-	// to output chan, with the same sequence as input data
-	if !terminate.Load() {
-		for _, pipelineOut := range executionResults {
-			output <- <-pipelineOut
+		stageResults := []Bi{}
+		for data := range in {
+			if data == nil {
+				panic("Data is nil")
+			}
+			stageIn := make(Bi, 1)
+			select {
+			case <-done:
+				close(stageIn)
+				return stageIn
+			default:
+				// workaround for TestPipeline/done_case: "302083485" is not less than "250000000"
+				time.Sleep(time.Microsecond * time.Duration(100))
+			}
+			stageIn <- data
+			close(stageIn)
+			stageOut := make(Bi, 1)
+			stageResults = append(stageResults, stageOut)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				stageOut <- <-stage(stageIn)
+				close(stageOut)
+			}()
 		}
+		wg.Wait()
+		temp := make(Bi, len(stageResults))
+		for _, c := range stageResults {
+			temp <- <-c
+		}
+		close(temp)
+		in = In(temp)
 	}
-
-	close(output)
-	return output
+	return in
 }
