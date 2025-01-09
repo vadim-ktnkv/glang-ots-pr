@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"os"
 	"sync"
@@ -57,7 +56,7 @@ func displayProgress(total int64, bytesWritten *atomic.Int64, wg *sync.WaitGroup
 }
 
 func Copy(fromPath, toPath string, offset, limit int64) error {
-	var totalBytes int64
+	var bytesToWrite int64
 	var bytesWritten atomic.Int64
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -84,10 +83,10 @@ func Copy(fromPath, toPath string, offset, limit int64) error {
 	}
 
 	// Calculating amount to process
-	if sourceSize == 0 || sourceSize-offset > limit {
-		totalBytes = limit
+	if sourceSize == 0 || limit < sourceSize-offset {
+		bytesToWrite = limit
 	} else {
-		totalBytes = sourceSize - offset
+		bytesToWrite = sourceSize - offset
 	}
 
 	// Create out file
@@ -98,33 +97,33 @@ func Copy(fromPath, toPath string, offset, limit int64) error {
 	defer outFile.Close()
 
 	// Show info and display progress bar
-	fmt.Printf("  From: %s\n    To: %s\nOffset: %9s\n Limit: %9s\n Total: %9s\n\n", from, to, ByteCountIEC(offset), ByteCountIEC(limit), ByteCountIEC(totalBytes))
-	go displayProgress(totalBytes, &bytesWritten, &wg)
+	fmt.Printf("  From: %s\n    To: %s\nOffset: %9s\n Limit: %9s\n Total: %9s\n\n", from, to, ByteCountIEC(offset), ByteCountIEC(limit), ByteCountIEC(bytesToWrite))
+	go displayProgress(bytesToWrite, &bytesWritten, &wg)
 
 	// Start data copy
-	var writeLimit int64
 	buf := make([]byte, 512) // Set max buffer size to 512 bytes, same as default bs size in dd
 	inFile.Seek(offset, 0)
-	for {
-		r, rErr := inFile.Read(buf)
-		if rErr != nil && rErr != io.EOF {
-			return ErrReadFile
-		}
-		if int64(r) > (limit - bytesWritten.Load()) {
-			writeLimit = limit - bytesWritten.Load()
+	process := true
+	var count int
+	for process {
+		if bytesToWrite > int64(len(buf)) {
+			count = len(buf)
 		} else {
-			writeLimit = int64(r)
+			count = int(bytesToWrite)
+			process = false
 		}
 
-		w, wErr := outFile.Write(buf[:writeLimit])
-		if wErr != nil {
+		_, err := inFile.Read(buf[:count])
+		if err != nil {
+			return ErrReadFile
+		}
+		w, err2 := outFile.Write(buf[:count])
+		if err2 != nil {
 			return ErrWriteFile
 		}
 		bytesWritten.Add(int64(w))
-
-		if rErr == io.EOF || bytesWritten.Load() >= limit {
-			wg.Wait()
-			return nil
-		}
+		bytesToWrite -= int64(w)
 	}
+	wg.Wait()
+	return nil
 }
