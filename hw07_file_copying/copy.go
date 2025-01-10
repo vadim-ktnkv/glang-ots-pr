@@ -14,9 +14,10 @@ var (
 	ErrUnsupportedFile       = errors.New("unsupported file")
 	ErrOffsetExceedsFileSize = errors.New("offset exceeds file size")
 	ErrLimitLessThenZero     = errors.New("limit must be >= 0")
-	ErrCantCreateOutputFile  = errors.New("cannot create")
+	ErrCantCreateOutputFile  = errors.New("cannot create output file")
 	ErrReadFile              = errors.New("cant read -from file")
 	ErrWriteFile             = errors.New("cant write -to file")
+	ErrSameFile              = errors.New("can't read and write on the same file")
 )
 
 func ByteCountIEC(b int64) string {
@@ -35,7 +36,7 @@ func ByteCountIEC(b int64) string {
 
 func displayProgress(total int64, bytesWritten *atomic.Int64, wg *sync.WaitGroup) {
 	// Display progress bar
-	var percent, i int
+	var percent, frame int
 
 	spinner := []string{"⣷", "⣯", "⣟", "⡿", "⢿", "⣻", "⣽", "⣾"}
 	colorGreen := "\033[0;32m"
@@ -43,15 +44,14 @@ func displayProgress(total int64, bytesWritten *atomic.Int64, wg *sync.WaitGroup
 	for {
 		time.Sleep(time.Millisecond * 100)
 		percent = int((float64(bytesWritten.Load()) / float64(total)) * 100)
-		fmt.Printf("\r%s%s%s%4d%% complete", colorGreen, spinner[i], colorNone, percent)
-		i++
-		i = i % len(spinner)
+		fmt.Printf("\r%s%s%s%4d%% complete", colorGreen, spinner[frame], colorNone, percent)
+		frame++
+		frame %= len(spinner)
 		if bytesWritten.Load() >= total {
 			fmt.Println()
 			wg.Done()
 			break
 		}
-
 	}
 }
 
@@ -68,13 +68,19 @@ func Copy(fromPath, toPath string, offset, limit int64) error {
 		limit = math.MaxInt64
 	}
 
+	// Validating in/out files are'nt same
+	if fromPath == toPath {
+		return ErrSameFile
+	}
+
 	// Checking inFile file
 	inFile, err := os.Open(fromPath)
-	if err != nil {
+	inFileStats, _ := inFile.Stat()
+	if err != nil || inFileStats.IsDir() {
 		return ErrUnsupportedFile
 	}
-	sourceStats, _ := inFile.Stat()
-	sourceSize := sourceStats.Size()
+
+	sourceSize := inFileStats.Size()
 	defer inFile.Close()
 
 	// Checking offset
@@ -82,7 +88,7 @@ func Copy(fromPath, toPath string, offset, limit int64) error {
 		return ErrOffsetExceedsFileSize
 	}
 
-	// Calculating amount to process
+	// Calculating amount for copy
 	if sourceSize == 0 || limit < sourceSize-offset {
 		bytesToWrite = limit
 	} else {
@@ -97,7 +103,8 @@ func Copy(fromPath, toPath string, offset, limit int64) error {
 	defer outFile.Close()
 
 	// Show info and display progress bar
-	fmt.Printf("  From: %s\n    To: %s\nOffset: %9s\n Limit: %9s\n Total: %9s\n\n", from, to, ByteCountIEC(offset), ByteCountIEC(limit), ByteCountIEC(bytesToWrite))
+	fmt.Printf("  From: %s\n    To: %s\nOffset: %9s\n Limit: %9s\n Total: %9s\n\n",
+		from, to, ByteCountIEC(offset), ByteCountIEC(limit), ByteCountIEC(bytesToWrite))
 	go displayProgress(bytesToWrite, &bytesWritten, &wg)
 
 	// Start data copy
