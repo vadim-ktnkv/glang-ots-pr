@@ -15,16 +15,17 @@ type EnvValue struct {
 	NeedRemove bool
 }
 
-// By IEEE Std 1003.1-2024 -
+// By IEEE Std 1003.1-2024 part 8 -
 // names shall not contain any bytes that have the encoded value of the character '='
 // and do not begin with a digit.
 // Other characters, and byte sequences that do not form valid characters, may be permitted by an implementation;
-// Function return TRUE if input string is IEEE Std 1003.1-2024 compliant.
+// Function return TRUE if input string is IEEE Std 1003.1-2024 part 8 compliant.
 func validateName(name string) bool {
 	// 1st rune must not be a digit 0-9
 	if name[0] > 47 && name[0] < 58 {
 		return false
 	}
+	// check all runes for
 	for i := 0; i < len(name); i++ {
 		// must not contain equals sign
 		if name[i] == '=' {
