@@ -18,9 +18,7 @@ func recoverStd(oldStd []*os.File, currStd []**os.File) {
 func closeFiles(stdFiles []*os.File) {
 	for i := range len(stdFiles) {
 		err := stdFiles[i].Close()
-		if err != nil {
-			panic(err)
-		}
+		checkErr(err, "")
 	}
 }
 
@@ -49,18 +47,14 @@ func TestRunCmd(t *testing.T) {
 		for i := range len(stdNames) {
 			fp := filepath.Join(wd, stdNames[i])
 			f, err := os.Create(fp)
-			if err != nil {
-				panic(err)
-			}
+			checkErr(err, "")
 			*currStd[i] = f
 			stdFiles[i] = f
 		}
 
 		// write some data to std-in
 		_, err := stdFiles[0].WriteString(toStdIn)
-		if err != nil {
-			panic(err)
-		}
+		checkErr(err, "")
 
 		// executing script
 		cmd := []string{"/bin/bash", scriptFile}

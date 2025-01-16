@@ -9,25 +9,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func writeEnvFile(filePath, data string) {
-	var f *os.File
-	var err error
-	f, err = os.Create(filePath)
-	if err != nil {
-		panic(err)
+func checkErr(err error, message string) {
+	if message != "" {
+		os.Stderr.WriteString(message)
 	}
-	_, err = f.WriteString(data)
 	if err != nil {
 		panic(err)
 	}
 }
 
+func writeEnvFile(filePath, data string) {
+	var f *os.File
+	var err error
+	f, err = os.Create(filePath)
+	checkErr(err, "")
+	_, err = f.WriteString(data)
+	checkErr(err, "")
+	err = f.Close()
+	checkErr(err, "")
+}
+
 func cleanWd(wd string) {
 	err := os.RemoveAll(wd)
-	if err != nil {
-		os.Stderr.WriteString("Please remove " + wd + " manually")
-		panic(err)
-	}
+	checkErr(err, "Please remove "+wd+" manually")
 }
 
 func TestReadDir(t *testing.T) {
