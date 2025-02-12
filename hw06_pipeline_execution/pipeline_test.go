@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 )
 
 const (
@@ -16,6 +17,28 @@ const (
 
 var isFullTesting = true
 
+// Stage generator.
+var g = func(_ string, f func(v interface{}) interface{}) Stage {
+	return func(in In) Out {
+		out := make(Bi)
+		go func() {
+			defer close(out)
+			for v := range in {
+				time.Sleep(sleepPerStage)
+				out <- f(v)
+			}
+		}()
+		return out
+	}
+}
+
+var stages = []Stage{
+	g("Dummy", func(v interface{}) interface{} { return v }),
+	g("Multiplier (* 2)", func(v interface{}) interface{} { return v.(int) * 2 }),
+	g("Adder (+ 100)", func(v interface{}) interface{} { return v.(int) + 100 }),
+	g("Stringifier", func(v interface{}) interface{} { return strconv.Itoa(v.(int)) }),
+}
+
 func TestPipeline(t *testing.T) {
 	// Stage generator
 	g := func(_ string, f func(v interface{}) interface{}) Stage {
@@ -24,6 +47,7 @@ func TestPipeline(t *testing.T) {
 			go func() {
 				defer close(out)
 				for v := range in {
+					// fmt.Printf("will run %s with data %s\n", N, v)
 					time.Sleep(sleepPerStage)
 					out <- f(v)
 				}
@@ -150,6 +174,81 @@ func TestAllStageStop(t *testing.T) {
 		wg.Wait()
 
 		require.Len(t, result, 0)
+	})
+}
 
+func TestAdditional(t *testing.T) {
+	t.Run("routines leaks", func(t *testing.T) {
+		defer goleak.VerifyNone(t)
+
+		data := []int{1, 2, 3, 4, 5}
+		in := make(Bi, len(data))
+		for _, v := range data {
+			in <- v
+		}
+		close(in)
+
+		done := make(Bi)
+		// Abort after 200ms
+		abortDur := sleepPerStage * 2
+		go func() {
+			<-time.After(abortDur)
+			close(done)
+		}()
+
+		result := make([]string, 0, len(data))
+		for s := range ExecutePipeline(in, done, stages...) {
+			result = append(result, s.(string))
+		}
+
+		require.Equal(t, []string{}, result)
+	})
+
+	t.Run("nil stage & nil data", func(t *testing.T) {
+		defer goleak.VerifyNone(t)
+
+		data := []interface{}{1, 2, 3, 4, 5}
+		in := make(Bi, len(data))
+		for _, v := range data {
+			in <- v
+		}
+		close(in)
+		stash := stages[2]
+		stages[2] = nil
+		require.Panics(t, func() {
+			ExecutePipeline(in, nil, stages...)
+		})
+		stages[2] = stash
+
+		data[2] = nil
+		in = make(Bi, len(data))
+		for _, v := range data {
+			in <- v
+		}
+		require.Panics(t, func() {
+			ExecutePipeline(in, nil, stages...)
+		})
+	})
+}
+
+func BenchmarkXxx(b *testing.B) {
+	data := []int{1, 2, 3, 4, 5}
+	in := make(Bi, len(data))
+	for _, v := range data {
+		in <- v
+	}
+	close(in)
+	b.Run("Bench", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			b.StopTimer()
+			in = make(Bi, len(data))
+			for _, v := range data {
+				in <- v
+			}
+			close(in)
+			b.StartTimer()
+
+			ExecutePipeline(in, nil, stages...)
+		}
 	})
 }
